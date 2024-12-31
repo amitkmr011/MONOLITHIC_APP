@@ -1,0 +1,79 @@
+trigger:
+- none
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Build
+    displayName: Build Java Application
+    jobs:
+      - job: build
+        displayName: Build Java App
+        steps:
+          # Install Java 17
+          - task: JavaToolInstaller@1
+            inputs:
+              versionSpec: '17'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          # Clean and package the project
+          - task: Maven@4
+            inputs:
+              azureSubscription: 'svc_portal_devops'
+              mavenPomFile: 'pom.xml'
+              goals: 'clean package'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+              javaHomeOption: 'JDKVersion'
+              mavenVersionOption: 'Default'
+              mavenAuthenticateFeed: false
+              effectivePomSkip: false
+              sonarQubeRunAnalysis: false
+          
+          # Copy Build Output to Artifact Staging
+          - task: CopyFiles@2
+            inputs:
+              SourceFolder: '$(Build.SourcesDirectory)'
+              Contents: '**/*.war'
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+          # Publish Build Artifacts
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'drop'
+              publishLocation: 'pipeline'
+
+  - stage: Test
+    displayName: Run Tests
+    dependsOn: Build
+    jobs:
+      - job: test
+        displayName: Run Unit Tests
+        steps:
+          # Download artifacts from Build stage
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'drop'
+              targetPath: '$(Pipeline.Workspace)/downloaded_artifacts'
+
+          
+          
+          # Copy WAR file to Tomcat server
+          - task: CopyFilesOverSSH@0
+            inputs:
+              sshEndpoint: 'amit_ssh'
+              sourceFolder: '$(Pipeline.Workspace)/downloaded_artifacts/target'
+              contents: '**/*.war'
+              targetFolder: '/opt/tomcat/webapps/'
+              readyTimeout: '20000'
+          
+          - task: SSH@0
+            inputs:
+              sshEndpoint: 'amit_ssh'
+              runOptions: 'inline'
+              inline: 'sudo systemctl restart tomcat  # Restart Tomcat to deploy the new WAR'
+              readyTimeout: '20000'
